@@ -1,592 +1,718 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Digital Skilling Programme — Registration</title>
-<style>
-  :root{
-    --bg:#FAF8F3;
-    --card:#FFFFFF;
-    --text:#292524;
-    --text-muted:#78716C;
-    --accent:#9A3B24;
-    --accent-dark:#7A2E1B;
-    --success-bg:#F0F5EC;
-    --success-text:#3F6B3F;
-    --success-border:#C7D9BC;
-    --border:#E7E2D8;
-    --radius:10px;
+/**
+ * ============================================================================
+ * DIGITAL SKILLING PROGRAMME — REGISTRATION APP
+ * ============================================================================
+ * HOW THE PIECES FIT
+ * - FIELDS (below) defines every question on the form and every sheet column.
+ * - INSTITUTES (below) defines who trains where and when. Each institute has
+ *   training places, and each place has its batches (start and end dates). The
+ *   form shows Institute -> Place -> Start date, each one filtered by the one
+ *   before it. An institute with `active: false` is hidden from the form, but
+ *   its code and sheet tab stay in place, ready to be switched back on.
+ * - Every registration is saved into its institute's tab (the `tab` name on
+ *   each institute below: IBest or Athang). If a participant changes
+ *   institute while editing, their row moves to the other tab automatically.
+ * - Age is worked out from the date of birth and saved in a hidden column.
+ *   Under-18 registrations are accepted quietly, coloured red in the sheet,
+ *   and cannot be edited by the participant afterwards.
+ * ============================================================================
+ */
+
+const PAST_SHEET_NAME = 'PastParticipants'; // you maintain this one by hand
+const MAX_EDITS = 2;                          // how many times a participant may edit their own info
+const MIN_AGE = 18;                           // under this: accepted, but row is coloured and locked from edits
+const UNDER_AGE_ROW_COLOR = '#EA9999';        // red highlight for under-age rows in the sheet
+const TRAINING_DAYS = 8;                      // only used when a batch has no end date: counts this many days, skipping Sundays
+
+// iBEST Institute (Region A) batches. Every Region A place uses this same list, so
+// every place offers the same start dates. Dates are year-month-day. The end date
+// is written out for each batch because some batches run longer than 8 days when
+// public holidays fall inside them.
+// To change a date, edit it here. To give one place its own dates, replace
+// REGION_A_BATCHES on that place's line with its own list of batches.
+const REGION_A_BATCHES = [
+  { batch: 'Batch 1',  start: '2026-12-07', end: '2026-12-15' },
+  { batch: 'Batch 2',  start: '2026-12-16', end: '2026-12-25' },
+  { batch: 'Batch 3',  start: '2026-12-28', end: '2027-01-06' },
+  { batch: 'Batch 4',  start: '2027-01-11', end: '2027-01-19' },
+  { batch: 'Batch 5',  start: '2027-01-20', end: '2027-01-28' },
+  { batch: 'Batch 6',  start: '2027-01-29', end: '2027-02-06' },
+  { batch: 'Batch 7',  start: '2027-02-09', end: '2027-02-17' },
+  { batch: 'Batch 8',  start: '2027-02-18', end: '2027-03-01' },
+  { batch: 'Batch 9',  start: '2027-03-02', end: '2027-03-10' },
+  { batch: 'Batch 10', start: '2027-03-11', end: '2027-03-19' },
+  { batch: 'Batch 11', start: '2027-03-22', end: '2027-03-30' },
+  { batch: 'Batch 12', start: '2027-03-31', end: '2027-04-08' },
+  { batch: 'Batch 13', start: '2027-04-12', end: '2027-04-21' },
+  { batch: 'Batch 14', start: '2027-04-22', end: '2027-04-30' }
+];
+
+// ⚠ SAMPLE BATCHES ONLY — Athang Academy Training (Region B) is switched off for now.
+// Replace these with the real batches when it goes live. `end` is optional: leave
+// it out and it is worked out as TRAINING_DAYS days from the start, skipping Sundays.
+const SAMPLE_REGION_B_BATCHES = [
+  { batch: 'Batch 1', start: '2027-01-11' },
+  { batch: 'Batch 2', start: '2027-02-08' }
+];
+
+const INSTITUTES = [
+  {
+    name: 'iBEST Institute',
+    tab: 'IBest',            // the sheet tab this institute's registrations go into
+    region: 'Region A',
+    active: true,
+    places: {
+      'Thimphu':          REGION_A_BATCHES,
+      'Haa':              REGION_A_BATCHES,
+      'Paro':             REGION_A_BATCHES,
+      'Punakha':          REGION_A_BATCHES,
+      'Gasa':             REGION_A_BATCHES,
+      'Wangdue Phodrang': REGION_A_BATCHES,
+      'Trongsa':          REGION_A_BATCHES,
+      'Tsirang':          REGION_A_BATCHES,
+      'Zhemgang':         REGION_A_BATCHES,
+      'Bumthang':         REGION_A_BATCHES
+    }
+  },
+  {
+    name: 'Athang Academy Training',
+    tab: 'Athang',           // the sheet tab this institute's registrations go into
+    region: 'Region B',
+    // ⛔ HIDDEN until the contract is signed. While this is false, the form never
+    // shows this institute and the server refuses new registrations for it, but
+    // everything else is kept ready. To bring it back: change false to true and
+    // put the real batches in below. Nothing else needs to change.
+    active: false,
+    places: {
+      'Thimphu':          SAMPLE_REGION_B_BATCHES,
+      'Samtse':           SAMPLE_REGION_B_BATCHES,
+      'Chhukha':          SAMPLE_REGION_B_BATCHES,
+      'Sarpang':          SAMPLE_REGION_B_BATCHES,
+      'Dagana':           SAMPLE_REGION_B_BATCHES,
+      'Samdrup Jongkhar': SAMPLE_REGION_B_BATCHES,
+      'Pemagatshel':      SAMPLE_REGION_B_BATCHES,
+      'Trashigang':       SAMPLE_REGION_B_BATCHES,
+      'Trashiyangtse':    SAMPLE_REGION_B_BATCHES,
+      'Mongar':           SAMPLE_REGION_B_BATCHES,
+      'Lhuentse':         SAMPLE_REGION_B_BATCHES
+    }
   }
-  * { box-sizing:border-box; }
-  body {
-    margin:0;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:var(--bg);
-    color:var(--text);
-    padding:24px 16px 60px;
+];
+
+// Shown on every step of the registration page so a stuck participant always
+// has a way to reach you. Just edit the values — leave whatsapp: '' to hide
+// the WhatsApp button if you don't want to use it.
+const SUPPORT_CONTACT = {
+  phone: '+975-XXXXXXXX',    // put your real support number here
+  whatsapp: '',              // e.g. '+975XXXXXXXX', or leave '' to hide
+  hours: 'Mon–Fri, 9am–5pm'
+};
+
+// Every question on the form, in order. Each entry becomes a sheet column too.
+//   label       the question shown to the participant
+//   header      (optional) a shorter column title for the sheet
+//   showIf      (optional) only show/require this question when ALL of these match
+//   noteAbove   (optional) small note shown above the question when it is visible
+//   computed    true = never shown on the form; filled in automatically (age, end date)
+//   dynamic     the options come from the INSTITUTES schedule instead of a fixed list
+const FIELDS = [
+  { id: 'name',   label: 'Full name',      type: 'text',  required: true  },
+  { id: 'email',  label: 'Email address',  type: 'email', required: false },
+  { id: 'phone',  label: 'Contact number', type: 'tel',   required: true  },
+  { id: 'gender', label: 'Gender',         type: 'select', required: true, options: ['Male', 'Female'] },
+  { id: 'dob',    label: 'Date of birth',  type: 'date',  required: true  },
+  { id: 'age',    label: 'Age', computed: true },
+
+  { id: 'qualification', label: 'Qualification', type: 'select', required: true,
+    options: ['Master', 'Degree', 'Higher Secondary School', 'Other'] },
+  { id: 'qualificationOther', label: 'Please specify your qualification', header: 'Qualification (other)',
+    type: 'text', required: true, placeholder: 'e.g. Class VIII, Class X',
+    showIf: [{ field: 'qualification', equals: 'Other' }] },
+
+  { id: 'employmentStatus', label: 'Status of employment', type: 'select', required: true,
+    options: ['Employed', 'Unemployed'] },
+  { id: 'employmentType', label: 'Please select the employment type', header: 'Employment type',
+    type: 'select', required: true,
+    options: ['Government', 'Private', 'Corporation', 'Self-employed', 'Other'],
+    noteAbove: '(Note: This section is only for EMPLOYED applicants.)',
+    showIf: [{ field: 'employmentStatus', equals: 'Employed' }] },
+  { id: 'employmentTypeOther', label: 'Please specify the employment type', header: 'Employment type (other)',
+    type: 'text', required: true,
+    showIf: [{ field: 'employmentStatus', equals: 'Employed' }, { field: 'employmentType', equals: 'Other' }] },
+  { id: 'employer', label: 'Name of the employing organization', header: 'Employing organization',
+    type: 'text', required: true,
+    showIf: [{ field: 'employmentStatus', equals: 'Employed' }] },
+
+  { id: 'address', label: 'Permanent address', type: 'text', required: true, placeholder: 'Village, Gewog, Dzongkhag' },
+  { id: 'laptop',  label: 'Do you have a laptop?', header: 'Has laptop', type: 'select', required: true,
+    options: ['Yes', 'No'] },
+
+  { id: 'institute', label: 'Select your institute', header: 'Institute', type: 'select', required: true,
+    options: activeInstitutes_().map(function(i) { return { value: i.name, label: i.name + ' (' + i.region + ')' }; }) },
+  { id: 'place',     label: 'Training place', type: 'select', required: true, dynamic: 'place' },
+  { id: 'startDate', label: 'Preferred training start date', header: 'Training start date',
+    type: 'select', required: true, dynamic: 'startDate' },
+  { id: 'trainingEnd', label: 'Training end date', computed: true }
+];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_FIELD_LENGTH = 300;   // longest answer accepted for any one question
+const MAX_CID_LENGTH = 30;      // longest CID / passport / permit number accepted
+
+// Row layout in every institute sheet:
+// Timestamp | CID | VerifiedVia | ...FIELDS (in order)... | EditsUsed | LastEditedAt
+const SYS_COLS_BEFORE = 3; // Timestamp, CID, VerifiedVia
+
+// What the registration page needs in order to draw itself. Computed fields
+// (age, end date) are left out, so the browser never learns they exist.
+function clientConfig_() {
+  return {
+    fields: FIELDS.filter(function(f) { return !f.computed; }),
+    support: SUPPORT_CONTACT,
+    maxEdits: MAX_EDITS,
+    schedule: scheduleMap_()
+  };
+}
+
+function jsonOut_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// Opening this script's link with ?action=config shows the settings as plain text
+// (handy for checking the link works). Opening it without that serves the original
+// page built into Google Apps Script — kept as a backup to the GitHub page.
+function doGet(e) {
+  if (e && e.parameter && e.parameter.action === 'config') {
+    return jsonOut_({ ok: true, result: clientConfig_() });
   }
-  .wrap { max-width:480px; margin:0 auto; }
-  header.top { text-align:center; margin-bottom:20px; }
-  header.top h1 { font-size:20px; font-weight:600; margin:0 0 4px; }
-  header.top p { font-size:14px; color:var(--text-muted); margin:0; }
-  .steps { display:flex; gap:24px; justify-content:center; margin:16px 0 24px; font-size:12px; color:var(--text-muted); }
-  .step { display:flex; align-items:center; gap:6px; }
-  .step .dot { width:20px; height:20px; border-radius:50%; background:var(--border); color:var(--text-muted); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; }
-  .step.active .dot { background:var(--accent); color:#fff; }
-  .step.active span.label { color:var(--text); font-weight:600; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:24px; }
-  label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
-  input, select { width:100%; padding:12px 14px; font-size:16px; border:1px solid var(--border); border-radius:8px; margin-bottom:16px; background:#fff; color:var(--text); }
-  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); }
-  input:disabled, select:disabled { background:#F2F0EA; color:var(--text-muted); }
-  button { width:100%; padding:14px; font-size:15px; font-weight:600; border-radius:8px; cursor:pointer; margin-bottom:10px; }
-  .btn-primary { background:var(--accent); color:#fff; border:none; }
-  .btn-primary:hover:not(:disabled) { background:var(--accent-dark); }
-  .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
-  .btn-secondary { background:transparent; color:var(--text-muted); border:1px dashed var(--border); }
-  .btn-secondary:disabled { cursor:not-allowed; }
-  .hint { font-size:12px; color:var(--text-muted); margin:-10px 0 16px; }
-  .info-box { background:#FBF3EC; border:1px solid #EAD9C8; border-radius:8px; padding:12px 14px; font-size:13px; color:var(--text); margin:0 0 16px; }
-  .info-box strong { color:var(--accent); }
-  .section-note { font-size:13px; font-weight:600; color:var(--accent); margin:4px 0 12px; }
-  .error { font-size:13px; color:#B3261E; margin:-10px 0 16px; }
-  .notice { border-radius:var(--radius); padding:20px; text-align:center; }
-  .notice.duplicate { background:var(--success-bg); border:1px solid var(--success-border); color:var(--success-text); }
-  .notice.duplicate h2 { margin:0 0 8px; font-size:16px; }
-  .notice.duplicate p { margin:0 0 12px; font-size:14px; }
-  .notice.duplicate button { margin-top:4px; margin-bottom:0; }
-  .hidden { display:none; }
-  .support-bar { margin-top:20px; text-align:center; font-size:13px; color:var(--text-muted); }
-  .support-bar a { color:var(--accent); font-weight:600; text-decoration:none; }
-  .support-bar a:hover { text-decoration:underline; }
-  .support-bar .sep { margin:0 6px; }
-  .notice.neutral { background:var(--card); border:1px solid var(--border); color:var(--text-muted); }
-  .card p.msg { margin:0 0 16px; font-size:14px; }
-</style>
-</head>
-<body>
-<div class="wrap">
+  const cfg = clientConfig_();
+  const t = HtmlService.createTemplateFromFile('Index');
+  t.fields = cfg.fields;
+  t.support = cfg.support;
+  t.maxEdits = cfg.maxEdits;
+  t.schedule = cfg.schedule;
+  return t.evaluate()
+    .setTitle('Digital Skilling Programme — Registration')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
 
-  <header class="top">
-    <h1>Digital Skilling Programme</h1>
-    <p>Hands-on training — registration</p>
-  </header>
+/**
+ * Web API used by the registration page hosted on GitHub. The page sends plain
+ * web requests instead of opening a Google page, so it works no matter which
+ * Google accounts the visitor is signed into.
+ * Each request is a POST whose body is JSON such as { "action": "check", "cid": "..." }.
+ * Every reply is { ok: true, result: ... } or { ok: false, error: "..." }.
+ */
+function doPost(e) {
+  let req;
+  try {
+    const body = e && e.postData && e.postData.contents;
+    if (!body || body.length > 50000) return jsonOut_({ ok: false, error: 'bad_request' });
+    req = JSON.parse(body);
+  } catch (err) {
+    return jsonOut_({ ok: false, error: 'bad_request' });
+  }
+  try {
+    switch (req && req.action) {
+      case 'config':      return jsonOut_({ ok: true, result: clientConfig_() });
+      case 'check':       return jsonOut_({ ok: true, result: checkDuplicate(req.cid) });
+      case 'getEditable': return jsonOut_({ ok: true, result: getEditableRegistration(req.cid) });
+      case 'submit':      return jsonOut_({ ok: true, result: submitRegistration(req.payload) });
+      case 'update':      return jsonOut_({ ok: true, result: updateRegistration(req.cid, req.payload) });
+      default:            return jsonOut_({ ok: false, error: 'unknown_action' });
+    }
+  } catch (err) {
+    Logger.log('API error (' + (req && req.action) + '): ' + err);
+    return jsonOut_({ ok: false, error: 'server_error' });
+  }
+}
 
-  <div class="steps">
-    <div class="step active" id="step1indicator"><span class="dot">1</span><span class="label">Verify ID</span></div>
-    <div class="step" id="step2indicator"><span class="dot">2</span><span class="label">Your details</span></div>
-  </div>
+// ---------------------------------------------------------------- helpers ---
 
-  <noscript><div class="notice neutral">Please turn on JavaScript in your browser to use this registration form.</div></noscript>
+function getSS_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
 
-  <div class="notice neutral" id="loadingCard">Loading the registration form…</div>
+// Dates are read and written in the spreadsheet's own time zone, so make sure
+// File > Settings > Time zone on your Sheet is set to Thimphu (GMT+6).
+function tz_() {
+  return getSS_().getSpreadsheetTimeZone();
+}
 
-  <div class="card hidden" id="loadError">
-    <p class="msg" id="loadErrorText"></p>
-    <button class="btn-primary" id="retryBtn">Try again</button>
-  </div>
+function todayStr_() {
+  return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
+}
 
-  <div class="card hidden" id="cidCard">
-    <label for="cidInput">CID number</label>
-    <input type="text" id="cidInput" inputmode="numeric" placeholder="e.g. 11234567890" autocomplete="off">
-    <div class="error hidden" id="cidError"></div>
-    <button class="btn-primary" id="checkBtn">Check and continue</button>
-    <!-- <button class="btn-secondary" disabled title="Enable once your organisation is approved as a Bhutan NDI verifier">
-      Scan with Bhutan NDI (coming soon)
-    </button> -->
-    <div class="hint">Don't have a CID (non-Bhutanese participant)? Enter your passport or work permit number above instead.</div>
-    <div class="info-box">Already registered this intake? Enter your CID and tap Check — you'll get an option to <strong>view and update your details</strong> (up to <span id="maxEditsText"></span> times).</div>
-  </div>
+// Institutes currently shown on the form (inactive ones are hidden).
+function activeInstitutes_() {
+  return INSTITUTES.filter(function(i) { return i.active !== false; });
+}
 
-  <div class="notice duplicate hidden" id="duplicateNotice">
-    <h2 id="duplicateHeading">You've already trained with us</h2>
-    <p id="duplicateText"></p>
-    <button class="btn-primary hidden" id="editBtn">Edit my details</button>
-  </div>
-
-  <div class="card hidden" id="formCard">
-    <div class="info-box hidden" id="editContextNote"></div>
-    <div id="fieldsContainer"></div>
-    <div class="error hidden" id="formError"></div>
-    <button class="btn-primary" id="submitBtn">Complete registration</button>
-  </div>
-
-  <div class="notice duplicate hidden" id="successNotice">
-    <h2 id="successHeading">You're registered</h2>
-    <p id="successText">Thanks — we've saved your details for this intake.</p>
-  </div>
-
-  <div class="support-bar" id="supportBar"></div>
-
-</div>
-
-<script>
-  // ============================================================================
-  // THE ONE THING TO SET UP: paste the link of your deployed Google Apps Script
-  // web app between the quotes. It looks like
-  //   https://script.google.com/macros/s/AKfycb.../exec
-  // ============================================================================
-  const APP_URL = 'PASTE_YOUR_APPS_SCRIPT_LINK_HERE';
-
-  // These are filled in from the Google Sheet's script when the page opens, so
-  // changing institutes, batches or questions never needs this page to change.
-  let FIELDS = [];
-  let MAX_EDITS = 2;
-  let SCHEDULE = {};      // { institute: { place: [{ batch, start, end }] } }
-  let SUPPORT = {};
-  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  let verifiedCid = null;
-  let lastCheckedCid = null;
-  let mode = 'new'; // 'new' or 'edit'
-  let fieldEls = {}; // field id -> { wrap, input }
-
-  const $ = function(id) { return document.getElementById(id); };
-
-  $('checkBtn').addEventListener('click', onCheckCid);
-  $('cidInput').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') onCheckCid();
+// A place's batches, each as { batch, start, end }. A missing batch name becomes
+// "Batch 1", "Batch 2"...; a missing end date is worked out from TRAINING_DAYS.
+function normalizeBatches_(list) {
+  return (list || []).map(function(b, i) {
+    return {
+      batch: b.batch || ('Batch ' + (i + 1)),
+      start: b.start,
+      end: b.end || trainingEndIso_(b.start, TRAINING_DAYS)
+    };
   });
-  $('editBtn').addEventListener('click', onEditClick);
-  $('submitBtn').addEventListener('click', onSubmit);
-  $('retryBtn').addEventListener('click', loadConfig);
+}
 
-  // -------------------------------------------------- talking to the script ---
+// The batch an institute offers at a place starting on this date, or null.
+function findBatch_(instituteName, place, startIso) {
+  const inst = findInstitute_(instituteName);
+  if (!inst || !Object.prototype.hasOwnProperty.call(inst.places, place)) return null;
+  return normalizeBatches_(inst.places[place]).find(function(b) { return b.start === startIso; }) || null;
+}
 
-  // Sends one request to the Apps Script link and returns its `result`.
-  // Sent as plain text with no cookies, so it works whichever Google accounts
-  // the visitor is signed into (this is what avoids the "unable to open the file" page).
-  async function callApi(action, data) {
-    const controller = new AbortController();
-    const timer = setTimeout(function() { controller.abort(); }, 30000);
-    try {
-      const res = await fetch(APP_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action: action }, data || {})),
-        credentials: 'omit',
-        redirect: 'follow',
-        signal: controller.signal
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const json = await res.json();
-      if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected reply');
-      return json.result;
-    } finally {
-      clearTimeout(timer);
+// { 'iBEST Institute': { Thimphu: [{batch, start, end}, ...], ... } } — sent to the
+// browser. Hidden institutes are left out entirely.
+function scheduleMap_() {
+  const map = {};
+  activeInstitutes_().forEach(function(inst) {
+    const places = {};
+    Object.keys(inst.places).forEach(function(p) { places[p] = normalizeBatches_(inst.places[p]); });
+    map[inst.name] = places;
+  });
+  return map;
+}
+
+function sheetHeader_() {
+  return ['Timestamp', 'CID', 'VerifiedVia', ...FIELDS.map(f => f.header || f.label), 'EditsUsed', 'LastEditedAt'];
+}
+
+// Returns the sheet tab for an institute, creating it if it's missing.
+// If the tab has no registrations yet (empty, or only an old heading row from
+// an earlier version of this app), its heading row is set to match the current
+// form. A tab that already holds registrations is never touched.
+function ensureInstituteSheet_(instituteName) {
+  const inst = findInstitute_(instituteName);
+  if (!inst) throw new Error('Unknown institute: ' + instituteName);
+
+  const ss = getSS_();
+  let sheet = ss.getSheetByName(inst.tab);
+  if (!sheet) {
+    sheet = ss.insertSheet(inst.tab);
+  }
+  const header = sheetHeader_();
+  if (sheet.getMaxColumns() < header.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), header.length - sheet.getMaxColumns());
+  }
+  const existing = sheet.getRange(1, 1, 1, header.length).getValues()[0];
+  const matches = header.every(function(h, i) { return String(existing[i]) === h; });
+  if (!matches) {
+    if (sheet.getLastRow() <= 1) {
+      sheet.getRange(1, 1, 1, sheet.getMaxColumns()).clearContent();
+      sheet.getRange(1, 1, 1, header.length).setValues([header]);
+      sheet.setFrozenRows(1);
+    } else {
+      Logger.log('Warning: tab "' + inst.tab + '" already has registrations but its heading row ' +
+        'does not match the current form, so it was left alone. Move those rows out and clear the tab.');
+    }
+  }
+  return sheet;
+}
+
+function fieldColIndex_(fieldId) {
+  const i = FIELDS.findIndex(f => f.id === fieldId);
+  return i === -1 ? -1 : SYS_COLS_BEFORE + i;
+}
+
+function editsUsedColIndex_()  { return SYS_COLS_BEFORE + FIELDS.length; }
+function lastEditedColIndex_() { return SYS_COLS_BEFORE + FIELDS.length + 1; }
+
+/**
+ * Sheets silently converts date-looking text (like a DOB) into a real Date
+ * object when it's read back. A raw Date breaks google.script.run when it's
+ * nested in a returned object — so anything read from a row and sent back to
+ * the browser goes through here first, turning any Date back into a plain
+ * 'yyyy-MM-dd' string.
+ */
+function formatFieldValue_(value) {
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, tz_(), 'yyyy-MM-dd');
+  }
+  return (value === null || value === undefined) ? '' : value;
+}
+
+function normalizeCid_(cid) {
+  return String(cid || '').replace(/\s+/g, '').trim();
+}
+
+// 'yyyy-MM-dd' -> { y, m, d }, or null if it isn't a real calendar date.
+function parseIso_(s) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  if (!match) return null;
+  const y = Number(match[1]), m = Number(match[2]), d = Number(match[3]);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return { y: y, m: m, d: d };
+}
+
+function calcAge_(dobIso) {
+  const b = parseIso_(dobIso);
+  const t = parseIso_(todayStr_());
+  if (!b || !t) return null;
+  let age = t.y - b.y;
+  if (t.m < b.m || (t.m === b.m && t.d < b.d)) age--;
+  return age;
+}
+
+// Fallback end date for a batch with no `end`: counts `days` days from the start, skipping Sundays.
+function trainingEndIso_(startIso, days) {
+  const s = parseIso_(startIso);
+  if (!s) return '';
+  let t = Date.UTC(s.y, s.m - 1, s.d);
+  let counted = 0;
+  for (let guard = 0; guard < 120; guard++) {
+    if (new Date(t).getUTCDay() !== 0) {
+      counted++;
+      if (counted === days) return new Date(t).toISOString().slice(0, 10);
+    }
+    t += 86400000;
+  }
+  return '';
+}
+
+function optionValues_(f) {
+  return (f.options || []).map(function(o) { return typeof o === 'string' ? o : o.value; });
+}
+
+function isFieldVisible_(f, values) {
+  if (!f.showIf) return true;
+  return f.showIf.every(function(c) { return values[c.field] === c.equals; });
+}
+
+function findInstitute_(name) {
+  return INSTITUTES.find(function(i) { return i.name === name; }) || null;
+}
+
+// --------------------------------------------------------- row look-ups ---
+
+/**
+ * Looks across every institute sheet for a row matching this CID.
+ * Returns { sheet, rowNumber, row, institute } (rowNumber is 1-indexed) or null.
+ */
+function findRegistrationRow_(cid) {
+  cid = normalizeCid_(cid);
+  for (const inst of INSTITUTES) {
+    const sheet = ensureInstituteSheet_(inst.name);
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (normalizeCid_(data[i][1]) === cid) {
+        return { sheet: sheet, rowNumber: i + 1, row: data[i], institute: inst.name };
+      }
+    }
+  }
+  return null;
+}
+
+// Age recorded for a saved row (falls back to working it out from the DOB).
+function rowAge_(row) {
+  const stored = row[fieldColIndex_('age')];
+  if (stored !== '' && stored !== null && stored !== undefined && !isNaN(Number(stored))) {
+    return Number(stored);
+  }
+  return calcAge_(formatFieldValue_(row[fieldColIndex_('dob')]));
+}
+
+// Under-age registrations can't be edited by the participant.
+function isEditLocked_(row) {
+  const age = rowAge_(row);
+  return age !== null && age < MIN_AGE;
+}
+
+/**
+ * Checks a CID against (1) past years' participants and (2) anyone who has
+ * already registered in this current intake, across ALL institute sheets —
+ * so someone can't dodge the duplicate check by picking the other institute.
+ *
+ * For a current-intake match it also says whether the participant may edit.
+ * It deliberately does not say WHY an edit isn't available, so an under-age
+ * participant can't tell they were flagged.
+ *
+ * TODO (Phase 3 / NDI): once verifier access is approved, the CID passed in
+ * here will come from NDI's verified proof response instead of a typed
+ * field — this function itself does not need to change.
+ */
+function checkDuplicate(cid) {
+  cid = normalizeCid_(cid);
+  if (!cid) return { duplicate: false };
+
+  const pastSheet = getSS_().getSheetByName(PAST_SHEET_NAME);
+  if (pastSheet) {
+    const data = pastSheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (normalizeCid_(data[i][0]) === cid) {
+        // Nothing from that row is sent back (not the name/contact, not the
+        // batch/place/sector) — the page only needs to know it's a past participant.
+        return { duplicate: true, scope: 'past' };
+      }
+    }
+  } else {
+    Logger.log('Warning: "PastParticipants" sheet not found — duplicate check against past years is skipped.');
+  }
+
+  const found = findRegistrationRow_(cid);
+  if (found) {
+    const locked = isEditLocked_(found.row);
+    const editsUsed = Number(found.row[editsUsedColIndex_()]) || 0;
+    const canEdit = !locked && editsUsed < MAX_EDITS;
+    return {
+      duplicate: true,
+      scope: 'current',
+      canEdit: canEdit,
+      editsRemaining: canEdit ? MAX_EDITS - editsUsed : 0,
+      limitReached: !locked && editsUsed >= MAX_EDITS
+    };
+  }
+
+  return { duplicate: false };
+}
+
+/**
+ * Returns this participant's saved details so the edit form can be
+ * pre-filled, plus how many edits they have left and which institute they're
+ * currently under. Returns canEdit:false for locked (under-age) rows or when
+ * the edit limit has been reached.
+ */
+function getEditableRegistration(cid) {
+  const found = findRegistrationRow_(cid);
+  if (!found) return { found: false };
+
+  const editsUsed = Number(found.row[editsUsedColIndex_()]) || 0;
+  if (isEditLocked_(found.row) || editsUsed >= MAX_EDITS) {
+    return { found: true, canEdit: false };
+  }
+
+  const data = {};
+  FIELDS.forEach(function(f) {
+    if (f.computed) return;
+    data[f.id] = String(formatFieldValue_(found.row[fieldColIndex_(f.id)]));
+  });
+
+  return {
+    found: true,
+    canEdit: true,
+    editsRemaining: MAX_EDITS - editsUsed,
+    institute: found.institute,
+    data: data
+  };
+}
+
+// ------------------------------------------------------------ validation ---
+
+/**
+ * Trims every submitted value and blanks any question that isn't showing
+ * (e.g. "Employer" when the participant said Unemployed) — so stale answers
+ * from a changed mind never get saved.
+ */
+function cleanPayload_(payload) {
+  payload = payload || {};
+  const clean = {};
+  FIELDS.forEach(function(f) {
+    if (f.computed) return;
+    const raw = payload[f.id];
+    clean[f.id] = (raw === null || raw === undefined) ? '' : String(raw).trim();
+  });
+  const snapshot = Object.assign({}, clean);
+  FIELDS.forEach(function(f) {
+    if (!f.computed && !isFieldVisible_(f, snapshot)) clean[f.id] = '';
+  });
+  return clean;
+}
+
+/**
+ * Validates cleaned answers: every showing question that is required has an
+ * answer, fixed-list answers are real options, the DOB is a real date, and
+ * the institute / place / start date really belong together. Note there is
+ * NO minimum-age rejection here — under-age registrations are accepted.
+ * Returns an error string, or null if it's fine.
+ */
+function validatePayload_(clean) {
+  for (const f of FIELDS) {
+    if (f.computed || !isFieldVisible_(f, clean)) continue;
+    const v = clean[f.id];
+    if (!v) {
+      if (f.required) return '"' + f.label + '" is required.';
+      continue;
+    }
+    if (v.length > MAX_FIELD_LENGTH) {
+      return '"' + f.label + '" is too long.';
+    }
+    if (f.type === 'email' && !EMAIL_RE.test(v)) {
+      return 'Please enter a valid email address.';
+    }
+    if (f.type === 'select' && !f.dynamic && optionValues_(f).indexOf(v) === -1) {
+      return 'Please choose a valid option for "' + f.label + '".';
     }
   }
 
-  async function loadConfig() {
-    $('loadError').classList.add('hidden');
-    $('cidCard').classList.add('hidden');
-    $('loadingCard').classList.remove('hidden');
-
-    if (APP_URL.indexOf('PASTE_') === 0) {
-      $('loadingCard').classList.add('hidden');
-      $('loadErrorText').textContent = 'This page is not connected yet. The administrator needs to paste the Apps Script link into APP_URL at the top of the page code.';
-      $('loadError').classList.remove('hidden');
-      return;
-    }
-
-    try {
-      const cfg = await callApi('config');
-      FIELDS = cfg.fields;
-      MAX_EDITS = cfg.maxEdits;
-      SCHEDULE = cfg.schedule;
-      SUPPORT = cfg.support || {};
-      $('maxEditsText').textContent = MAX_EDITS;
-      renderSupport();
-      $('loadingCard').classList.add('hidden');
-      $('cidCard').classList.remove('hidden');
-    } catch (err) {
-      console.error('Could not load the registration settings:', err);
-      $('loadingCard').classList.add('hidden');
-      $('loadErrorText').textContent = "We couldn't load the registration form. Please check your internet connection and try again. If it keeps happening, please contact the programme support team.";
-      $('loadError').classList.remove('hidden');
-    }
+  const age = calcAge_(clean.dob);
+  if (age === null || age < 0 || age > 110) {
+    return 'Please enter a valid date of birth.';
   }
 
-  function renderSupport() {
-    const bar = $('supportBar');
-    bar.textContent = '';
-    if (!SUPPORT.phone) return;
-    bar.appendChild(document.createTextNode('Facing a problem? Call '));
-    const call = document.createElement('a');
-    call.href = 'tel:' + String(SUPPORT.phone).replace(/[^+\d]/g, '');
-    call.textContent = SUPPORT.phone;
-    bar.appendChild(call);
-    if (SUPPORT.whatsapp) {
-      const sep = document.createElement('span');
-      sep.className = 'sep';
-      sep.textContent = '·';
-      bar.appendChild(sep);
-      bar.appendChild(document.createTextNode('or '));
-      const wa = document.createElement('a');
-      wa.href = 'https://wa.me/' + String(SUPPORT.whatsapp).replace(/[^0-9]/g, '');
-      wa.target = '_blank';
-      wa.rel = 'noopener';
-      wa.textContent = 'WhatsApp us';
-      bar.appendChild(wa);
-    }
-    if (SUPPORT.hours) {
-      bar.appendChild(document.createElement('br'));
-      bar.appendChild(document.createTextNode(SUPPORT.hours));
-    }
+  const inst = findInstitute_(clean.institute);
+  if (!inst || inst.active === false) {
+    return 'Please select a valid institute.';
   }
+  if (!Object.prototype.hasOwnProperty.call(inst.places, clean.place)) {
+    return 'Please select a training place that belongs to your chosen institute.';
+  }
+  if (!findBatch_(clean.institute, clean.place, clean.startDate)) {
+    return 'Please select one of the available start dates for that place.';
+  }
+  return null;
+}
 
-  const NETWORK_MESSAGE = 'Something went wrong. Please check your internet connection and try again.';
+// Values the participant never types: age (from DOB) and last training day
+// (the end date of the batch they picked).
+function computeFields_(clean) {
+  const batch = findBatch_(clean.institute, clean.place, clean.startDate);
+  return {
+    age: calcAge_(clean.dob),
+    trainingEnd: batch ? batch.end : ''
+  };
+}
 
-  // ---------------------------------------------------------- CID step ---
+// Anything a visitor types that starts with = + - or @ would be run by Google Sheets
+// as a formula (a known way to steal data from a sheet that a form writes to). A
+// leading apostrophe makes Sheets keep it as plain text instead. It also keeps a
+// phone number's "+" from being dropped.
+function safeCell_(value) {
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(value)) return "'" + value;
+  return value;
+}
 
-  async function onCheckCid() {
-    const cid = $('cidInput').value.trim();
-    const errEl = $('cidError');
-    errEl.classList.add('hidden');
+function buildRow_(timestamp, cid, verifiedVia, clean, computed, editsUsed, lastEdited) {
+  return [
+    timestamp,
+    safeCell_(cid),
+    verifiedVia,
+    ...FIELDS.map(f => f.computed ? computed[f.id] : safeCell_(clean[f.id])),
+    editsUsed,
+    lastEdited
+  ];
+}
 
+function colourRow_(sheet, rowNumber, width, underAge) {
+  sheet.getRange(rowNumber, 1, 1, width).setBackground(underAge ? UNDER_AGE_ROW_COLOR : null);
+}
+
+// ------------------------------------------------------ save / edit rows ---
+
+/**
+ * Saves a new registration into the sheet of the chosen institute. Re-checks
+ * the duplicate and re-validates server-side (not just client-side) so
+ * nothing here can be skipped by reloading or editing the page.
+ * Under-age registrations are saved exactly like any other (the participant
+ * sees the same success message) but the row is coloured red.
+ */
+function submitRegistration(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    payload = payload || {};
+    const cid = normalizeCid_(payload.cid);
     if (!cid) {
-      errEl.textContent = 'Please enter a CID number.';
-      errEl.classList.remove('hidden');
-      return;
+      return { success: false, message: 'CID is required.' };
+    }
+    if (cid.length > MAX_CID_LENGTH) {
+      return { success: false, message: 'That CID looks too long. Please check it and try again.' };
     }
 
-    mode = 'new';
-    lastCheckedCid = cid;
-
-    const btn = $('checkBtn');
-    btn.disabled = true;
-    btn.textContent = 'Checking...';
-    try {
-      const result = await callApi('check', { cid: cid });
-      if (result.duplicate) {
-        showDuplicate(result);
-      } else {
-        verifiedCid = cid;
-        showForm();
-      }
-    } catch (err) {
-      console.error(err);
-      errEl.textContent = NETWORK_MESSAGE;
-      errEl.classList.remove('hidden');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Check and continue';
+    const dup = checkDuplicate(cid); // TODO (Phase 3 / NDI): cid will be NDI-verified by this point
+    if (dup.duplicate) {
+      return { success: false, message: 'This CID is already registered.', duplicateInfo: dup };
     }
+
+    const clean = cleanPayload_(payload);
+    const validationError = validatePayload_(clean);
+    if (validationError) {
+      return { success: false, message: validationError };
+    }
+
+    const computed = computeFields_(clean);
+    const sheet = ensureInstituteSheet_(clean.institute);
+    const row = buildRow_(new Date(), cid, 'manual entry', clean, computed, 0, ''); // TODO (Phase 3 / NDI): 'NDI' once verified
+    sheet.appendRow(row);
+    if (computed.age < MIN_AGE) {
+      colourRow_(sheet, sheet.getLastRow(), row.length, true);
+    }
+    return { success: true, institute: clean.institute };
+  } finally {
+    lock.releaseLock();
   }
+}
 
-  function showDuplicate(result) {
-    document.getElementById('cidCard').classList.add('hidden');
-    document.getElementById('formCard').classList.add('hidden');
-    const notice = document.getElementById('duplicateNotice');
-    const heading = document.getElementById('duplicateHeading');
-    const text = document.getElementById('duplicateText');
-    const editBtn = document.getElementById('editBtn');
-    editBtn.classList.add('hidden');
+/**
+ * Overwrites a participant's own registration row, capped at MAX_EDITS, and
+ * refused for locked (under-age) rows. Institute / place / date can all be
+ * changed. If the institute changes, the row is moved: appended to the new
+ * institute's sheet, then deleted from the old one — both under the same
+ * script lock, so it can't be left half-done.
+ */
+function updateRegistration(cid, payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    cid = normalizeCid_(cid);
+    const found = cid && cid.length <= MAX_CID_LENGTH ? findRegistrationRow_(cid) : null;
+    if (!found) {
+      return { success: false, message: "We couldn't find a registration for that CID." };
+    }
 
-    if (result.scope === 'current') {
-      heading.textContent = "You're already registered";
-      if (result.canEdit) {
-        text.textContent = 'This CID already registered for this intake. You can update your details (' +
-          result.editsRemaining + ' edit' + (result.editsRemaining === 1 ? '' : 's') + ' remaining).';
-        editBtn.classList.remove('hidden');
-      } else if (result.limitReached) {
-        text.textContent = "This CID already registered for this intake, and you've used your " +
-          MAX_EDITS + ' allowed edits. Contact support below if you need a further change.';
-      } else {
-        text.textContent = 'This CID is already registered for this intake. If you need any help, please contact support below.';
-      }
+    if (isEditLocked_(found.row)) {
+      return { success: false, message: 'This registration can no longer be edited.' };
+    }
+
+    const editsUsed = Number(found.row[editsUsedColIndex_()]) || 0;
+    if (editsUsed >= MAX_EDITS) {
+      return { success: false, message: "You've already used your " + MAX_EDITS + ' allowed edits.' };
+    }
+
+    const clean = cleanPayload_(payload);
+    const validationError = validatePayload_(clean);
+    if (validationError) {
+      return { success: false, message: validationError };
+    }
+
+    const computed = computeFields_(clean);
+    const underAge = computed.age < MIN_AGE;
+    const newEditsUsed = editsUsed + 1;
+    const newRow = buildRow_(
+      found.row[0],       // keep original registration timestamp
+      cid,
+      found.row[2],       // keep original VerifiedVia
+      clean,
+      computed,
+      newEditsUsed,
+      new Date()
+    );
+
+    const oldInstitute = found.institute;
+    const newInstitute = clean.institute;
+
+    if (newInstitute === oldInstitute) {
+      found.sheet.getRange(found.rowNumber, 1, 1, newRow.length).setValues([newRow]);
+      colourRow_(found.sheet, found.rowNumber, newRow.length, underAge);
     } else {
-      heading.textContent = "You've already trained with us";
-      text.textContent = 'Our records show that you have already completed the Digital Skilling Programme. ' +
-        'No need to register again. If you think this is a mistake, please contact support below.';
-    }
-    notice.classList.remove('hidden');
-  }
-
-  async function onEditClick() {
-    const btn = $('editBtn');
-    btn.disabled = true;
-    btn.textContent = 'Loading...';
-    try {
-      const result = await callApi('getEditable', { cid: lastCheckedCid });
-      if (result.found && result.canEdit) {
-        verifiedCid = lastCheckedCid;
-        mode = 'edit';
-        $('duplicateNotice').classList.add('hidden');
-        const note = $('editContextNote');
-        note.textContent = "You're currently registered with " + result.institute +
-          ". If you change your institute, your registration will move to that institute's list.";
-        note.classList.remove('hidden');
-        showForm(result.data);
-      } else {
-        $('duplicateText').textContent = 'Sorry, this registration can no longer be edited.';
-        btn.classList.add('hidden');
-      }
-    } catch (err) {
-      console.error(err);
-      $('duplicateText').textContent = NETWORK_MESSAGE;
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Edit my details';
-    }
-  }
-
-  // -------------------------------------------------------- date helpers ---
-
-  function dateLabel(iso) {
-    const p = iso.split('-').map(Number);
-    const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
-    return DAY_NAMES[dt.getUTCDay()] + ', ' + p[2] + ' ' + MONTH_NAMES[p[1] - 1] + ' ' + p[0];
-  }
-
-  // "7 – 15 Dec 2026", "28 Dec 2026 – 6 Jan 2027"
-  function rangeLabel(startIso, endIso) {
-    const a = startIso.split('-').map(Number);
-    const b = endIso.split('-').map(Number);
-    const m1 = MONTH_NAMES[a[1] - 1], m2 = MONTH_NAMES[b[1] - 1];
-    if (a[0] === b[0] && a[1] === b[1]) return a[2] + ' – ' + b[2] + ' ' + m1 + ' ' + a[0];
-    if (a[0] === b[0]) return a[2] + ' ' + m1 + ' – ' + b[2] + ' ' + m2 + ' ' + a[0];
-    return a[2] + ' ' + m1 + ' ' + a[0] + ' – ' + b[2] + ' ' + m2 + ' ' + b[0];
-  }
-
-  // The batch (name, start, end) offered at this place starting on this date.
-  function findBatch(institute, place, startIso) {
-    const batches = (SCHEDULE[institute] || {})[place] || [];
-    for (let i = 0; i < batches.length; i++) {
-      if (batches[i].start === startIso) return batches[i];
-    }
-    return null;
-  }
-
-  function batchText(b) {
-    return b.batch + ' (' + rangeLabel(b.start, b.end) + ')';
-  }
-
-  // ------------------------------------------------------------ the form ---
-
-  function showForm(prefillData) {
-    document.getElementById('cidCard').classList.add('hidden');
-    document.getElementById('step1indicator').classList.remove('active');
-    document.getElementById('step2indicator').classList.add('active');
-    buildFields(prefillData);
-    document.getElementById('submitBtn').textContent = mode === 'edit' ? 'Save changes' : 'Complete registration';
-    document.getElementById('formCard').classList.remove('hidden');
-  }
-
-  function isVisible(f, values) {
-    if (!f.showIf) return true;
-    return f.showIf.every(function(c) { return values[c.field] === c.equals; });
-  }
-
-  function currentValues() {
-    const v = {};
-    FIELDS.forEach(function(f) { v[f.id] = fieldEls[f.id].input.value.trim(); });
-    return v;
-  }
-
-  // options can be plain strings or { value, label }
-  function setOptions(select, options, blankLabel) {
-    select.innerHTML = '';
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = blankLabel;
-    select.appendChild(blank);
-    options.forEach(function(opt) {
-      const o = document.createElement('option');
-      o.value = typeof opt === 'string' ? opt : opt.value;
-      o.textContent = typeof opt === 'string' ? opt : opt.label;
-      select.appendChild(o);
-    });
-  }
-
-  function buildFields(prefillData) {
-    const container = document.getElementById('fieldsContainer');
-    container.innerHTML = '';
-    fieldEls = {};
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    FIELDS.forEach(function(f) {
-      const wrap = document.createElement('div');
-      wrap.id = 'w_' + f.id;
-
-      if (f.noteAbove) {
-        const note = document.createElement('div');
-        note.className = 'section-note';
-        note.textContent = f.noteAbove;
-        wrap.appendChild(note);
-      }
-
-      const label = document.createElement('label');
-      label.setAttribute('for', 'f_' + f.id);
-      label.textContent = f.label + (f.required ? '' : ' (optional)');
-      wrap.appendChild(label);
-
-      let input;
-      if (f.type === 'select') {
-        input = document.createElement('select');
-        setOptions(input, f.dynamic ? [] : (f.options || []), 'Select...');
-      } else {
-        input = document.createElement('input');
-        input.type = f.type;
-        if (f.placeholder) input.placeholder = f.placeholder;
-        if (f.type === 'date' && f.id === 'dob') input.max = todayIso;
-      }
-      input.id = 'f_' + f.id;
-      wrap.appendChild(input);
-
-      if (f.dynamic === 'startDate') {
-        const hint = document.createElement('div');
-        hint.className = 'hint hidden';
-        hint.id = 'scheduleHint';
-        wrap.appendChild(hint);
-      }
-
-      if (f.type === 'select') {
-        input.addEventListener('change', function() { refresh(); });
-      }
-
-      container.appendChild(wrap);
-      fieldEls[f.id] = { wrap: wrap, input: input };
-
-      if (prefillData && prefillData[f.id] !== undefined && prefillData[f.id] !== '' && !f.dynamic) {
-        input.value = prefillData[f.id];
-      }
-    });
-
-    refresh(prefillData);
-  }
-
-  // Re-works the dependent dropdowns (institute -> place -> start date) and
-  // shows/hides conditional questions. Called after every dropdown change.
-  function refresh(prefillData) {
-    FIELDS.forEach(function(f) {
-      if (!f.dynamic) return;
-      const el = fieldEls[f.id].input;
-      const vals = currentValues();
-      const places = SCHEDULE[vals.institute] || {};
-      let opts = [];
-      let blankLabel = 'Select...';
-
-      if (f.dynamic === 'place') {
-        opts = Object.keys(places);
-        if (!vals.institute) blankLabel = 'Choose an institute first';
-      } else if (f.dynamic === 'startDate') {
-        const batches = places[vals.place] || [];
-        opts = batches.map(function(b) { return { value: b.start, label: b.batch + ': ' + rangeLabel(b.start, b.end) }; });
-        if (!vals.place) blankLabel = 'Choose a training place first';
-        else if (!batches.length) blankLabel = 'No dates announced yet';
-      }
-
-      const wanted = (prefillData && prefillData[f.id]) ? prefillData[f.id] : el.value;
-      setOptions(el, opts, blankLabel);
-      const values = opts.map(function(o) { return typeof o === 'string' ? o : o.value; });
-      if (wanted && values.indexOf(wanted) !== -1) el.value = wanted;
-      el.disabled = opts.length === 0;
-    });
-
-    const vals = currentValues();
-    FIELDS.forEach(function(f) {
-      fieldEls[f.id].wrap.classList.toggle('hidden', !isVisible(f, vals));
-    });
-
-    const hint = document.getElementById('scheduleHint');
-    if (hint) {
-      const batch = vals.startDate ? findBatch(vals.institute, vals.place, vals.startDate) : null;
-      if (batch) {
-        hint.textContent = batch.batch + ' runs from ' + dateLabel(batch.start) + ' to ' +
-          dateLabel(batch.end) + ' (Sundays off).';
-        hint.classList.remove('hidden');
-      } else {
-        hint.classList.add('hidden');
-      }
-    }
-  }
-
-  function showFormError(message, fieldId) {
-    const errEl = document.getElementById('formError');
-    errEl.textContent = message;
-    errEl.classList.remove('hidden');
-    if (fieldId && fieldEls[fieldId]) {
-      const input = fieldEls[fieldId].input;
-      if (input.scrollIntoView) input.scrollIntoView({ block: 'center' });
-      input.focus();
-    }
-  }
-
-  // ------------------------------------------------------------- submit ---
-
-  async function onSubmit() {
-    $('formError').classList.add('hidden');
-
-    const vals = currentValues();
-    const payload = { cid: verifiedCid };
-    FIELDS.forEach(function(f) {
-      payload[f.id] = isVisible(f, vals) ? vals[f.id] : ''; // questions that aren't showing are never sent
-    });
-
-    for (let i = 0; i < FIELDS.length; i++) {
-      const f = FIELDS[i];
-      if (isVisible(f, vals) && f.required && !vals[f.id]) {
-        showFormError('"' + f.label + '" is required.', f.id);
-        return;
-      }
-    }
-    if (payload.email && !EMAIL_RE.test(payload.email)) {
-      showFormError('Please enter a valid email address.', 'email');
-      return;
+      const dest = ensureInstituteSheet_(newInstitute);
+      dest.appendRow(newRow);
+      colourRow_(dest, dest.getLastRow(), newRow.length, underAge);
+      found.sheet.deleteRow(found.rowNumber);
     }
 
-    const btn = $('submitBtn');
-    const idleLabel = mode === 'edit' ? 'Save changes' : 'Complete registration';
-    btn.disabled = true;
-    btn.textContent = mode === 'edit' ? 'Saving...' : 'Submitting...';
-
-    let result;
-    try {
-      result = mode === 'edit'
-        ? await callApi('update', { cid: verifiedCid, payload: payload })
-        : await callApi('submit', { payload: payload });
-    } catch (err) {
-      console.error(err);
-      btn.disabled = false;
-      btn.textContent = idleLabel;
-      showFormError(NETWORK_MESSAGE);
-      return;
-    }
-
-    btn.disabled = false;
-    btn.textContent = idleLabel;
-
-    if (result.success) {
-      $('formCard').classList.add('hidden');
-      const heading = $('successHeading');
-      const text = $('successText');
-      const batch = findBatch(payload.institute, payload.place, payload.startDate);
-      const where = ' for training in ' + payload.place + ': ' +
-        (batch ? batchText(batch) : dateLabel(payload.startDate)) + '.';
-      if (mode === 'edit') {
-        heading.textContent = 'Details updated';
-        text.textContent = (result.moved
-          ? "Your details have been updated and you've been moved to " + result.institute
-          : "Your details have been updated — you're registered with " + result.institute) +
-          where + ' Edits remaining: ' + result.editsRemaining + '.';
-      } else {
-        heading.textContent = "You're registered";
-        text.textContent = "Thanks — we've saved your details. You're registered with " + result.institute + where;
-      }
-      $('successNotice').classList.remove('hidden');
-    } else if (result.duplicateInfo) {
-      $('formCard').classList.add('hidden');
-      showDuplicate(result.duplicateInfo);
-    } else {
-      showFormError(result.message || 'Something went wrong.');
-    }
+    return {
+      success: true,
+      editsRemaining: Math.max(0, MAX_EDITS - newEditsUsed),
+      institute: newInstitute,
+      moved: newInstitute !== oldInstitute
+    };
+  } finally {
+    lock.releaseLock();
   }
-
-  loadConfig();
-</script>
-</body>
-</html>
+}
